@@ -1,3 +1,3 @@
 # FLambas
 
-[](assert/framework_fmamba.png)
+![model](assert/framework_fmamba.png)

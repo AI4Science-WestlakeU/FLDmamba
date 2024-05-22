@@ -2,7 +2,7 @@
 
 ![model](assert/framework_fmamba.png)
 
-FLambas [followed](https://github.com/state-spaces/mamba) mamba, so we need to install the environment required by mamba first. 
+FLambas followed [mamba](https://github.com/state-spaces/mamba) , so we need to install the environment required by mamba first. 
 ## Train and evaluate
 ```
 python -u run.py \

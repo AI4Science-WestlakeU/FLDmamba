@@ -1,3 +1,3 @@
 # FLambas
 
-[](./asserts/framework_fmamba.pdf)
+[](./assert/framework_fmamba.pdf)

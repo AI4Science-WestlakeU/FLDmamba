@@ -8,7 +8,7 @@ pip install -r requirements.txt
 ```
 
 ## Train and evaluate
-```
+```bash
 python -u run.py \
   --is_training 1 \
   --root_path ./dataset/ETT-small/ \

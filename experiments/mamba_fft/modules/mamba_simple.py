@@ -60,7 +60,7 @@ class Mamba_simple(nn.Module):
                 d_state=16,  # SSM state expansion factor
                 d_conv=4,    # Local convolution width
                 expand=2,    # Block expansion factor
-                fft=0,
+                fft=1,
                 config=configs)
             )
         
@@ -106,7 +106,7 @@ class Mamba_fft(nn.Module):
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len
         self.output_attention = configs.output_attention
-        self.use_norm = configs.use_norm
+        self.use_norm = True
         self.d_model = configs.d_model
         # Embedding
         self.enc_embedding = DataEmbedding_inverted(configs.seq_len, configs.d_model, configs.embed, configs.freq,
@@ -121,7 +121,7 @@ class Mamba_fft(nn.Module):
                 d_state=16,  # SSM state expansion factor
                 d_conv=4,    # Local convolution width
                 expand=2,    # Block expansion factor
-                fft=0,
+                fft=1,
                 config=configs)
             )
             block_list2.append(Mamba(
@@ -130,7 +130,7 @@ class Mamba_fft(nn.Module):
                 d_state=16,  # SSM state expansion factor
                 d_conv=4,    # Local convolution width
                 expand=2,    # Block expansion factor
-                fft=1,
+                fft=0,
                 config=configs)
             )
         
@@ -192,12 +192,12 @@ class Mamba_fft(nn.Module):
         enc_out = self.rbf(enc_out)
 
         for i in range(self.layers):
-            #enc_out = (self.blocks[i](enc_out) + self.blocks2[i](enc_out) + enc_out)/3
-            enc_out = (self.blocks2[i](enc_out) + enc_out)/2
+            enc_out = (self.blocks[i](enc_out) + self.blocks2[i](enc_out) + enc_out)/3
+            # enc_out = (self.blocks2[i](enc_out) + enc_out)/2
 
         hidden = torch.fft.fft(enc_out)
         enc_out_real,enc_out_imag = hidden.real, hidden.imag
-        enc_out = self.fourier(enc_out)
+
         B,L,N = enc_out.shape
         pred_len = self.configs.pred_len
         A = self.projector_A(enc_out).reshape(B,L,pred_len,-1)
@@ -219,10 +219,11 @@ class Mamba_fft(nn.Module):
             dec_out = ((A*torch.exp(alpha*t)*torch.exp(omega_complex*t)).real).sum(-1)
         else:
             dec_out = self.projector(enc_out)
+ 
         dec_out = dec_out.permute(0, 2, 1)
        
         if self.use_norm:
-            # De-Normalization from Non-stationary Transformer
+            # De-Normalization 
             dec_out = dec_out * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
             dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
 
@@ -238,7 +239,6 @@ class rbf(nn.Module):
         self.configs = configs
         self.distance = distance
         self.scale = (1/(configs.enc_in*configs.d_model))
-        self.weights1 = nn.Parameter(torch.ones(1).float())
         
         self.sparsity_threshold  = 0.01
         self.sigma = configs.sigma
@@ -249,12 +249,16 @@ class rbf(nn.Module):
         K_matrix = []
         B,l,h = x.shape
         if self.distance == 0:
-            x_distane = torch.range(0,h).to(x.device)
-            K = torch.exp(-(x_distane)**2/(2*(torch.pi)**2))
-            for i in range(h):
-                K_matrix.append(torch.cat([K[1:i+1].flip(0),K[:h-i]]))
-            K_matrix = torch.cat(K_matrix,dim=0).reshape(h,h).unsqueeze(0)
-            K_matrix = torch.einsum('ijk->ikj',K_matrix)
+            # x_distane = torch.range(0,h).to(x.device)
+            # K = torch.exp(-(x_distane)**2/(2*(torch.pi)**2))
+            
+            # for i in range(h):
+            #     K_matrix.append(torch.cat([K[1:i+1].flip(0),K[:h-i]]))
+            # K_matrix = torch.cat(K_matrix,dim=0).reshape(h,h).unsqueeze(0)
+            # K_matrix = torch.einsum('ijk->ikj',K_matrix)
+            x_distane = torch.range(0,h-1).to(x.device)
+            temp = x_distane[...,None]-x_distane[None,...]
+            K_matrix = torch.exp(-(temp)**2/(2*(torch.pi)**2))[None,...]
             return K_matrix
         elif self.distance == 1:
             for i in range(l):
@@ -406,8 +410,9 @@ class Mamba(nn.Module):
             xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+        
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
-        if self.use_fast_path and causal_conv1d_fn is not None and inference_params is None:  # Doesn't support outputting the states
+        if self.use_fast_path and causal_conv1d_fn is not None and inference_params is None and False:  # Doesn't support outputting the states
             out = mamba_inner_fn(
                 xz,
                 self.conv1d.weight,
@@ -447,16 +452,20 @@ class Mamba(nn.Module):
             x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
             dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
             
-            #pdb.set_trace()
+            
+            
             dt = self.dt_proj.weight @ dt.t()
             dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
             b,d,l = dt.shape
+            
             if self.fft == 1:
-             
+                # hidden : [32, 7, 1024]
+                # dt : 32, 2048, 7
+                # dt_fft : [32, 2048, 7]
                 dt_fft = torch.fft.fft(dt,dim=-2)
                 dt = torch.cat([dt_fft.real.unsqueeze(-1),dt_fft.imag.unsqueeze(-1)],dim=-1)
                 dt = self.fourier_proj(dt).squeeze(-1)
-                
+                dt = torch.fft.ifft(dt,dim=-2).real
 
             B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
             C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
@@ -473,14 +482,15 @@ class Mamba(nn.Module):
                 delta_softplus=True,
                 return_last_state=ssm_state is not None,
             )
+            
             if ssm_state is not None:
                 y, last_state = y
                 ssm_state.copy_(last_state)
             y = rearrange(y, "b d l -> b l d")
             out = self.out_proj(y)
-     
+
         out = self.layernorm(out)
-    
+
         return out
 
     def step(self, hidden_states, conv_state, ssm_state):

@@ -1,4 +1,4 @@
-# FLambas
+# FLDmamba: Integrating Fourier and Laplace Transform Decomposition with Mamba for Enhanced Time Series Prediction
 
 
 
